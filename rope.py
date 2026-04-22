@@ -49,6 +49,7 @@ def apply_rotary_emb(
     """
 
     _, seqlen, _, _ = query.shape
+    seqlen = min(seqlen, max_seq_len)
     device = query.device
     # todo
     #
@@ -67,9 +68,32 @@ def apply_rotary_emb(
     # Then, combine these trigonometric values with the tensors query_real, query_imag,
     # key_real, and key_imag.
 
-    raise NotImplementedError
-
-    query_out = None
-    key_out = None
-    # Return the rotary position embeddings for the query and key tensors
+    # Compute per-dimension rotation frequencies: θ_i = 1 / (theta ^ (2i / head_dim))
+    freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32, device=device) / head_dim))
+ 
+    # Position indices [0, 1, ..., seqlen-1]
+    t = torch.arange(seqlen, device=device, dtype=torch.float32)
+ 
+    # Outer product → (seqlen, head_dim/2) angle matrix
+    freqs_matrix = torch.outer(t, freqs)
+    cos_freqs = torch.cos(freqs_matrix)
+    sin_freqs = torch.sin(freqs_matrix)
+ 
+    # Broadcast to (batch, seqlen, n_heads, head_dim/2)
+    cos_freqs = reshape_for_broadcast(cos_freqs, query_real)
+    sin_freqs = reshape_for_broadcast(sin_freqs, query_real)
+ 
+    # Rotate: [q_r, q_i] → [q_r·cos − q_i·sin, q_r·sin + q_i·cos]
+    query_out = torch.stack(
+        [query_real * cos_freqs - query_imag * sin_freqs,
+         query_real * sin_freqs + query_imag * cos_freqs],
+        dim=-1
+    ).reshape(query.shape).type_as(query)
+ 
+    key_out = torch.stack(
+        [key_real * cos_freqs - key_imag * sin_freqs,
+         key_real * sin_freqs + key_imag * cos_freqs],
+        dim=-1
+    ).reshape(key.shape).type_as(key)
+ 
     return query_out, key_out
